@@ -1,3 +1,4 @@
+import os
 import sys
 import itertools
 import threading
@@ -20,6 +21,9 @@ def main():
     if len(sys.argv) > 2:
         pdf_path = sys.argv[1]
         query = sys.argv[2]
+        if not os.path.isfile(pdf_path):
+            print(f"'{pdf_path}' isn't a valid pdf_path.")
+            return
     else:
         print("Usage: python mainn.py <pdf_path> <query>")
         return
@@ -38,7 +42,6 @@ def main():
     t.start()
 
 
-    print("Hello from chatdocs!")
     # Load the pdf
     loader = PyPDFLoader(file_path=pdf_path)
     data = loader.load()
