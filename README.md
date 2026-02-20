@@ -39,6 +39,7 @@ uv sync
 
 ### 3. Run
 ```bash
+source .venv/bin/activate
 python main.py documents/resume.pdf "What is the candidate's experience with Python?"
 ```
 <img src="assets/screenshot.png" width="600" height="150" alt="Demo" >
