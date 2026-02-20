@@ -12,121 +12,124 @@ from langchain_ollama import ChatOllama
 from langchain_classic.chains import create_history_aware_retriever, create_retrieval_chain
 from langchain_classic.chains.combine_documents import create_stuff_documents_chain
 from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
-from langchain_ollama import ChatOllama
-
-
 
 def main():
+    if len(sys.argv) < 2:
+        print("Usage: python main.py <pdf_path>")
+        return
     
-    if len(sys.argv) > 2:
-        pdf_path = sys.argv[1]
-        query = sys.argv[2]
-        if not os.path.isfile(pdf_path):
-            print(f"'{pdf_path}' isn't a valid pdf_path.")
-            return
-    else:
-        print("Usage: python mainn.py <pdf_path> <query>")
+    pdf_path = sys.argv[1]
+    if not os.path.isfile(pdf_path):
+        print(f"Error: '{pdf_path}' is not a valid file.")
         return
 
-    done = False
-    #here is the animation
-    def animate():
+    # --- Step 1: Document Processing (Run once) ---
+    stop_animation = False
+    def animate(message="Loading document"):
         for c in itertools.cycle(['|', '/', '-', '\\']):
-            if done:
+            if stop_animation:
                 break
-            sys.stdout.write('\rloading ' + c)
+            sys.stdout.write(f'\r{message} {c}')
             sys.stdout.flush()
             time.sleep(0.1)
+        sys.stdout.write('\r' + ' ' * (len(message) + 2) + '\r')
 
     t = threading.Thread(target=animate)
     t.start()
 
+    try:
+        loader = PyPDFLoader(file_path=pdf_path)
+        data = loader.load()
+        text_splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=100)
+        chunks = text_splitter.split_documents(data)
 
-    # Load the pdf
-    loader = PyPDFLoader(file_path=pdf_path)
-    data = loader.load()
+        embeddings = OllamaEmbeddings(model="nomic-embed-text")
+        vector_db = Chroma.from_documents(
+            documents=chunks, 
+            embedding=embeddings,
+            collection_name="local-rag"
+        )
+        
+        llm = ChatOllama(model="llama3", temperature=0)
 
-    # split into chunks
-    text_splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=100)
-    chunks = text_splitter.split_documents(data)
+        # RAG Chain Setup
+        contextualize_q_system_prompt = (
+            "Given a chat history and the latest user question "
+            "which might reference context in the chat history, "
+            "formulate a standalone question which can be understood "
+            "without the chat history. Do NOT answer the question, "
+            "just reformulate it if needed and otherwise return it as is."
+        )
 
-    #
-    embeddings = OllamaEmbeddings(model="nomic-embed-text")
+        contextualize_q_prompt = ChatPromptTemplate.from_messages([
+            ("system", contextualize_q_system_prompt),
+            MessagesPlaceholder("chat_history"),
+            ("human", "{input}"),
+        ])
 
-    vector_db = Chroma.from_documents(
-        documents=chunks, 
-        embedding=embeddings,
-        collection_name="local-rag"
-    )
-    
-    # Initialize our Local LLM
-    llm = ChatOllama(model="llama3", temperature=0)
+        history_aware_retriever = create_history_aware_retriever(
+            llm, vector_db.as_retriever(), contextualize_q_prompt
+        )
 
-    # Reasoning Step: Contextualize the Question
-    # This sub-chain re-writes the user question to be standalone if there's chat history.
-    contextualize_q_system_prompt = (
-        "Given a chat history and the latest user question "
-        "which might reference context in the chat history, "
-        "formulate a standalone question which can be understood "
-        "without the chat history. Do NOT answer the question, "
-        "just reformulate it if needed and otherwise return it as is."
-    )
+        system_prompt = (
+            "You are an assistant for question-answering tasks. "
+            "Use the following pieces of retrieved context to answer "
+            "the user's question. If you don't know the answer, say that you "
+            "don't know. Use three sentences maximum and keep the "
+            "answer concise.\n\n"
+            "{context}"
+        )
 
-    contextualize_q_prompt = ChatPromptTemplate.from_messages([
-        ("system", contextualize_q_system_prompt),
-        MessagesPlaceholder("chat_history"),
-        ("human", "{input}"),
-    ])
+        qa_prompt = ChatPromptTemplate.from_messages([
+            ("system", system_prompt),
+            MessagesPlaceholder("chat_history"),
+            ("human", "{input}"),
+        ])
 
-    # Create the history-aware retriever
-    # This uses the vector_db from Step 3
-    history_aware_retriever = create_history_aware_retriever(
-        llm, vector_db.as_retriever(), contextualize_q_prompt
-    )
+        question_answer_chain = create_stuff_documents_chain(llm, qa_prompt)
+        rag_chain = create_retrieval_chain(history_aware_retriever, question_answer_chain)
 
-    # Answer Generation Step
-    # This defines how the final answer is crafted using the retrieved chunks.
-    system_prompt = (
-        "You are an assistant for question-answering tasks. "
-        "Use the following pieces of retrieved context to answer "
-        "the user's question. If you don't know the answer, say that you "
-        "don't know. Use three sentences maximum and keep the "
-        "answer concise.\n\n"
-        "{context}"
-    )
+    finally:
+        stop_animation = True
+        t.join()
 
-    qa_prompt = ChatPromptTemplate.from_messages([
-        ("system", system_prompt),
-        MessagesPlaceholder("chat_history"),
-        ("human", "{input}"),
-    ])
-
-    # This chain "stuffs" the retrieved documents into the prompt
-    question_answer_chain = create_stuff_documents_chain(llm, qa_prompt)
-
-    # The Final Retrieval Chain
-    # This unites the history-aware retriever and the document chain.
-    rag_chain = create_retrieval_chain(history_aware_retriever, question_answer_chain)
-
-
-    # query = "Which college did he study and which branch ?"
+    # --- Step 2: Interactive Chat Loop ---
     chat_history = []
-    response = rag_chain.invoke({
-        "input": query, 
-        "chat_history": chat_history
-    })
-    
-    # Update history for the next turn
-    chat_history.extend([
-        ("human", query),
-        ("assistant", response["answer"])
-    ])
+    print(f"\n✅ Ready! Chatting with: {os.path.basename(pdf_path)}")
+    print("(Type 'exit' or 'quit' to stop)\n")
 
-    answer, sources = response["answer"], response["context"]
-    done = True
+    while True:
+        query = input("You: ").strip()
+        
+        if query.lower() in ["exit", "quit"]:
+            print("Goodbye!")
+            break
+        
+        if not query:
+            continue
 
-    sys.stdout.write('\r')
-    print(f">>>> {answer}")
+        # Start loading animation for the LLM response
+        stop_animation = False
+        t = threading.Thread(target=animate, args=("Thinking",))
+        t.start()
+
+        try:
+            response = rag_chain.invoke({
+                "input": query, 
+                "chat_history": chat_history
+            })
+            
+            answer = response["answer"]
+            
+            # Update history to maintain context
+            chat_history.append(("human", query))
+            chat_history.append(("assistant", answer))
+
+        finally:
+            stop_animation = True
+            t.join()
+
+        print(f"AI: {answer}\n")
 
 if __name__ == "__main__":
     main()
