@@ -1,3 +1,8 @@
+import sys
+import itertools
+import threading
+import time
+
 from langchain_community.document_loaders import PyPDFLoader
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_ollama import OllamaEmbeddings
@@ -8,17 +13,39 @@ from langchain_classic.chains.combine_documents import create_stuff_documents_ch
 from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 from langchain_ollama import ChatOllama
 
+
+
 def main():
     
+    if len(sys.argv) > 2:
+        pdf_path = sys.argv[1]
+        query = sys.argv[2]
+    else:
+        print("Usage: python mainn.py <pdf_path> <query>")
+        return
+
+    done = False
+    #here is the animation
+    def animate():
+        for c in itertools.cycle(['|', '/', '-', '\\']):
+            if done:
+                break
+            sys.stdout.write('\rloading ' + c)
+            sys.stdout.flush()
+            time.sleep(0.1)
+
+    t = threading.Thread(target=animate)
+    t.start()
+
+
     print("Hello from chatdocs!")
     # Load the pdf
-    loader = PyPDFLoader("Pankaj_Mittal_Resume.pdf")
+    loader = PyPDFLoader(file_path=pdf_path)
     data = loader.load()
 
     # split into chunks
     text_splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=100)
     chunks = text_splitter.split_documents(data)
-    print(f"Created {len(chunks)} chunks from your PDF.")
 
     #
     embeddings = OllamaEmbeddings(model="nomic-embed-text")
@@ -79,7 +106,7 @@ def main():
     rag_chain = create_retrieval_chain(history_aware_retriever, question_answer_chain)
 
 
-    query = "Which college did he study and which branch ?"
+    # query = "Which college did he study and which branch ?"
     chat_history = []
     response = rag_chain.invoke({
         "input": query, 
@@ -93,9 +120,10 @@ def main():
     ])
 
     answer, sources = response["answer"], response["context"]
-    
-    print(f"AI: {answer}")
-    print(f"Sources used: {len(sources)} chunks")
+    done = True
+
+    sys.stdout.write('\r')
+    print(f">>>> {answer}")
 
 if __name__ == "__main__":
     main()
